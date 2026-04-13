@@ -1,0 +1,10 @@
+# Rust Analyzer MCP Configuration for VS Code / Cursor / Claude Desktop
+
+{
+  "mcpServers": {
+    "rust-analyzer": {
+      "command": "rust-analyzer-mcp",
+      "args": ["--project-root", "${workspaceFolder}"]
+    }
+  }
+}

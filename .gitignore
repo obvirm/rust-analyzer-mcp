@@ -6,3 +6,9 @@
 # IDE
 /.idea/
 /.vscode/
+
+# Untracked files
+terminal-tool.json
+terminal-security.json
+logs/
+-p/

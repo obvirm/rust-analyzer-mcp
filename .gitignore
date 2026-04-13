@@ -3,30 +3,6 @@
 /debug/
 /release/
 
-# Old project versions
-/-p/
-
-# Config files (not part of project)
-terminal-tool.json
-terminal-security.json
-
 # IDE
 /.idea/
-/.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Config with secrets
-config/local.toml
-.env
-
-# Misc
-*.bak
-*.tmp
+.vscode/

@@ -5,6 +5,10 @@
     "rust-analyzer": {
       "command": "rust-analyzer-mcp",
       "args": ["--project-root", "${workspaceFolder}"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
     }
   }
 }

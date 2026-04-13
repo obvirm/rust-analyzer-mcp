@@ -1,33 +1,77 @@
 # rust-analyzer-mcp
 
-MCP (Model Context Protocol) Server that wraps rust-analyzer LSP for AI assistants like Claude, Cursor, and other MCP-compatible clients.
+MCP (Model Context Protocol) Server yang membungkus rust-analyzer LSP untuk AI assistants seperti Claude, Cursor, dan client MCP lainnya.
 
-## Features
+## Fitur
 
-- **Full LSP Integration**: Communicate with rust-analyzer via Language Server Protocol
-- **MCP Tools**: 15+ tools for code analysis (goto definition, find references, hover, completions, etc.)
-- **Auto-Update**: Automatically download latest rust-analyzer nightly
+- **Full LSP Integration**: Komunikasi dengan rust-analyzer via Language Server Protocol
+- **MCP Tools**: 15+ tools untuk analisis kode (goto definition, find references, hover, completions, dll)
+- **Auto-Update**: Download rust-analyzer nightly terbaru otomatis
 - **Workspace Management**: Multi-project workspace support
-- **Caching**: Built-in result caching for performance
+- **Caching**: Built-in result caching untuk performa
 
-## Installation
+## Cara Pasang
 
-### Prerequisites
-
-- Rust 1.70+
-- rust-analyzer (auto-installed if not found in PATH)
-
-### Build from Source
+### 1. Clone & Build
 
 ```bash
-git clone https://github.com/yourusername/rust-analyzer-mcp.git
+git clone https://github.com/username/rust-analyzer-mcp.git
 cd rust-analyzer-mcp
 cargo build --release
 ```
 
-The binary will be at `target/release/rust-analyzer-mcp` (or `.exe` on Windows).
+Binary ada di `target/release/rust-analyzer-mcp.exe` (Windows) atau `target/release/rust-analyzer-mcp` (Linux/Mac).
 
-## Usage
+### 2. Konfigurasi MCP Client
+
+#### VS Code / Cursor / Windsurf
+
+Tambahkan ke `.vscode/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rust-analyzer": {
+      "command": "path/to/rust-analyzer-mcp.exe",
+      "args": ["--project-root", "${workspaceFolder}"]
+    }
+  }
+}
+```
+
+#### Claude Desktop
+
+Tambahkan ke `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) atau `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "rust-analyzer": {
+      "command": "path/to/rust-analyzer-mcp.exe",
+      "args": ["--project-root", "${workspaceFolder}"]
+    }
+  }
+}
+```
+
+#### OpenCode
+
+Tambahkan ke `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "rust-analyzer": {
+      "command": ["path/to/rust-analyzer-mcp.exe"],
+      "args": ["--project-root", "${workspaceFolder}"],
+      "enabled": true,
+      "type": "local"
+    }
+  }
+}
+```
+
+## Cara Pakai
 
 ### Command Line Options
 
@@ -35,13 +79,12 @@ The binary will be at `target/release/rust-analyzer-mcp` (or `.exe` on Windows).
 rust-analyzer-mcp [OPTIONS]
 
 Options:
-      --ra-path <PATH>         Path to rust-analyzer binary
-      --project-root <PATH>    Rust project root to analyze
-  -c, --config <FILE>          Configuration file (default: config/default.toml)
-      --no-auto-update         Disable auto-update checking
+      --ra-path <PATH>         Path ke rust-analyzer binary
+      --project-root <PATH>    Project root yang dianalisa
+  -c, --config <FILE>          Config file (default: config/default.toml)
+      --no-auto-update         Disable auto-update
       --log-level <LEVEL>      Log level (default: info)
-      --metrics                Enable metrics endpoint
-      --health-check           Health check mode (exit after check)
+      --health-check           Health check mode (exit setelah check)
   -h, --help                   Print help
 ```
 
@@ -56,7 +99,7 @@ Options:
 
 ### Configuration File
 
-See `config/default.toml` for all options:
+Lihat `config/default.toml` untuk semua opsi:
 
 ```toml
 [rust_analyzer]
@@ -82,20 +125,20 @@ prevent_path_traversal = true
 
 | Tool | Description |
 |------|-------------|
-| `open_project` | Open a Rust project workspace |
-| `status` | Get server status and version |
-| `goto_definition` | Jump to symbol definition |
-| `find_references` | Find all references to a symbol |
-| `hover` | Get hover information |
+| `open_project` | Buka Rust project workspace |
+| `status` | Get status dan version server |
+| `goto_definition` | Lompat ke simbol definition |
+| `find_references` | Cari semua referensi ke simbol |
+| `hover` | Get informasi hover |
 | `completions` | Get auto-completions |
-| `diagnostics` | Get compile errors/warnings |
-| `code_action` | Get available code actions |
-| `document_symbol` | List symbols in a file |
-| `workspace_symbol` | Search symbols across workspace |
+| `diagnostics` | Get error/warning kompilasi |
+| `code_action` | Get code actions yang tersedia |
+| `document_symbol` | List simbol di file |
+| `workspace_symbol` | Cari simbol di seluruh workspace |
 | `inlay_hints` | Get inlay hints |
-| `expand_macro` | Expand macro at cursor |
-| `format` | Format file with rustfmt |
-| `rename` | Rename a symbol |
+| `expand_macro` | Expand macro di cursor |
+| `format` | Format file dengan rustfmt |
+| `rename` | Rename simbol |
 
 ## MCP Resources
 
@@ -108,8 +151,8 @@ prevent_path_traversal = true
 
 | Prompt | Description |
 |--------|-------------|
-| `analyze_code` | Analyze code at location |
-| `explain_error` | Explain compiler error |
+| `analyze_code` | Analyze code di lokasi |
+| `explain_error` | Explain error compiler |
 
 ## Development
 
@@ -119,7 +162,7 @@ prevent_path_traversal = true
 cargo test
 ```
 
-### Run with Debug Logging
+### Run dengan Debug Logging
 
 ```bash
 RUST_LOG=debug cargo run
@@ -131,13 +174,37 @@ RUST_LOG=debug cargo run
 cargo run -- --health-check
 ```
 
+## Troubleshooting
+
+### rust-analyzer tidak ditemukan
+
+```bash
+# Install rust-analyzer
+rustup component add rust-analyzer
+
+# atau via system package manager
+brew install rust-analyzer  # macOS
+sudo apt install rust-analyzer  # Linux
+```
+
+### MCP tidak connect
+
+1. Pastikan binary sudah di-build dengan benar
+2. Cek log dengan `--log-level debug`
+3. Verify rust-analyzer accessible: `cargo run -- --health-check`
+
+### Workspace tidak terdeteksi
+
+Pastikan ada `Cargo.toml` di project root yang ingin di-open.
+
 ## Architecture
 
 ```
-┌─────────────┐     JSON-RPC     ┌─────────────┐
-│   MCP       │ ◄──────────────► │   rust-     │
-│   Client    │                  │   analyzer  │
-└─────────────┘                  └─────────────┘
+             JSON-RPC
+┌─────────────┐     ┌─────────────┐
+│   MCP       │ ◄──► │   rust-     │
+│   Client    │     │   analyzer  │
+└─────────────┘     └─────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────┐

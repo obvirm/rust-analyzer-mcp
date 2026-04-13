@@ -26,7 +26,7 @@ pub async fn download_and_install(tag: &str) -> Result<()> {
     Ok(())
 }
 
-async fn install_binary(archive_path: &Path, tag: &str) -> Result<PathBuf> {
+async fn install_binary(archive_path: &Path, _tag: &str) -> Result<PathBuf> {
     let install_dir = get_install_dir()?;
     let binary_name = if cfg!(target_os = "windows") {
         "rust-analyzer.exe"

@@ -23,6 +23,7 @@ pub struct McpServer {
     pub config: Config,
     pub lsp_client: Arc<RwLock<Option<Arc<LspClient>>>>,
     pub workspace_manager: Arc<WorkspaceManager>,
+    #[allow(dead_code)]
     cache: Arc<Cache<String, serde_json::Value>>,
     pub metrics: Arc<Metrics>,
     pub start_time: Instant,

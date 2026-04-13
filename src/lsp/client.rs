@@ -6,6 +6,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 pub struct LspClient {
+    #[allow(dead_code)]
     process: Child,
     writer: Mutex<tokio::process::ChildStdin>,
     reader: Mutex<BufReader<tokio::process::ChildStdout>>,

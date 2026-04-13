@@ -1,0 +1,460 @@
+
+
+---
+
+## 🔒 1. Error Handling & Recovery
+
+### LSP Crash Recovery
+```rust
+impl LspClient {
+    pub async fn start_with_recovery(ra_path: &Path, workspace_root: &Path, max_retries: u32) -> Result<Self> {
+        let mut last_error = None;
+        
+        for attempt in 0..max_retries {
+            match Self::start(ra_path, workspace_root).await {
+                Ok(client) => return Ok(client),
+                Err(e) => {
+                    last_error = Some(e);
+                    log::warn!("LSP startup attempt {} failed: {}", attempt + 1, e);
+                    if attempt < max_retries - 1 {
+                        tokio::time::sleep(Duration::from_secs(2_u64.pow(attempt))).await;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap())
+    }
+}
+```
+
+### Graceful Degradation & Error Recovery Pattern
+- Timeout handling untuk setiap LSP request (default: 30s)
+- Retry logic untuk transient errors
+- Automatic LSP restart on crash
+
+```rust
+impl McpServer {
+    async fn execute_with_retry<F, T>(&self, operation: F, max_retries: u32) -> Result<T>
+    where F: async Fn() -> Result<T>,
+    {
+        let mut last_error = None;
+        
+        for attempt in 0..max_retries {
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_error = Some(e.clone());
+                    if !is_retryable_error(&e) {
+                        return Err(e);
+                    }
+                    if attempt < max_retries - 1 {
+                        self.restart_lsp_client().await?;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap())
+    }
+    
+    async fn restart_lsp_client(&self) -> Result<()> {
+        *self.lsp_client.write().await = None;
+        if let Some(root) = &self.project_root {
+            let client = LspClient::start(&self.ra_path, Path::new(root)).await?;
+            *self.lsp_client.write().await = Some(Arc::new(client));
+        }
+        Ok(())
+    }
+}
+
+fn is_retryable_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .map(|e| e.kind() == std::io::ErrorKind::BrokenPipe || e.kind() == std::io::ErrorKind::ConnectionReset)
+        .unwrap_or(false)
+        || e.to_string().contains("LSP not initialized")
+}
+```
+
+---
+
+## 💾 2. Caching Strategy
+
+### In-Memory Cache (LRU + TTL)
+```rust
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
+pub struct Cache<K, V> {
+    store: Arc<RwLock<HashMap<K, CacheEntry<V>>>>,
+    ttl: Duration,
+    max_entries: usize,
+}
+
+struct CacheEntry<V> { value: V, created: Instant }
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone> Cache<K, V> {
+    pub fn new(ttl: Duration, max_entries: usize) -> Self {
+        Self { store: Arc::new(RwLock::new(HashMap::new())), ttl, max_entries }
+    }
+    
+    pub async fn get(&self, key: &K) -> Option<V> {
+        let store = self.store.read().await;
+        let entry = store.get(key)?;
+        if entry.created.elapsed() > self.ttl { return None; }
+        Some(entry.value.clone())
+    }
+    
+    pub async fn set(&self, key: K, value: V) {
+        let mut store = self.store.write().await;
+        if store.len() >= self.max_entries {
+            if let Some(oldest) = store.iter().min_by_key(|(_, e)| e.created).map(|(k, _)| k.clone()) {
+                store.remove(&oldest);
+            }
+        }
+        store.insert(key, CacheEntry { value, created: Instant::now() });
+    }
+}
+```
+
+### Cached Operations
+- `workspace_symbol` - 5 min TTL
+- `file_structure` - 2 min TTL
+- `completions` - 1 min TTL
+- `hover` - 30 sec TTL
+- `inlay_hints` - 2 min TTL
+
+---
+
+## 🏢 3. Multi-workspace Support
+
+```rust
+pub struct WorkspaceManager {
+    workspaces: Arc<RwLock<HashMap<PathBuf, WorkspaceInfo>>>,
+    active_workspace: Arc<RwLock<Option<PathBuf>>>,
+}
+
+#[derive(Clone)]
+pub struct WorkspaceInfo {
+    pub root: PathBuf,
+    pub lsp_client: Arc<LspClient>,
+    pub crate_names: Vec<String>,
+}
+
+impl WorkspaceManager {
+    pub async fn add_workspace(&self, root: PathBuf) -> Result<WorkspaceInfo> {
+        let cargo_toml = root.join("Cargo.toml");
+        if !cargo_toml.exists() {
+            anyhow::bail!("Not a Cargo project: {}", root.display());
+        }
+        
+        let lsp_client = LspClient::start(&self.ra_path, &root).await?;
+        let info = WorkspaceInfo {
+            root: root.clone(),
+            lsp_client: Arc::new(lsp_client),
+            crate_names: self.parse_crate_names(&cargo_toml).await?,
+        };
+        
+        self.workspaces.write().await.insert(root, info.clone());
+        if self.active_workspace.read().await.is_none() {
+            *self.active_workspace.write().await = Some(root);
+        }
+        Ok(info)
+    }
+    
+    pub async fn switch_workspace(&self, root: &Path) -> Result<()> {
+        let workspaces = self.workspaces.read().await;
+        if !workspaces.contains_key(root) {
+            anyhow::bail!("Workspace not found: {}", root.display());
+        }
+        *self.active_workspace.write().await = Some(root.to_path_buf());
+        Ok(())
+    }
+    
+    pub async fn get_active(&self) -> Result<Arc<LspClient>> {
+        let active = self.active_workspace.read().await;
+        let root = active.as_ref().ok_or_else(|| anyhow::anyhow!("No active workspace"))?;
+        let workspaces = self.workspaces.read().await;
+        let info = workspaces.get(root).ok_or_else(|| anyhow::anyhow!("Workspace not found"))?;
+        Ok(info.lsp_client.clone())
+    }
+}
+```
+
+### New Tools
+- `switch_workspace` - Switch ke workspace lain
+- `list_workspaces` - List semua workspace
+
+---
+
+## 🔐 4. Security
+
+### Input Validation
+```rust
+pub fn validate_file_path(path: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(path);
+    let abs = if path.is_absolute() { path.clone() } else { std::env::current_dir()?.join(&path) };
+    let canonical = abs.canonicalize().map_err(|_| anyhow!("Invalid path: {}", path.display()))?;
+    
+    let allowed = std::env::current_dir().map_err(|_| anyhow!("Cannot determine allowed directory"))?;
+    if !canonical.starts_with(&allowed) {
+        return Err(anyhow!("Path escapes allowed directory"));
+    }
+    
+    let path_str = canonical.to_str().unwrap_or("");
+    if path_str.contains("..") || (path_str.contains("~") && path_str.contains("/.ssh")) {
+        return Err(anyhow!("Dangerous path pattern detected"));
+    }
+    
+    Ok(canonical)
+}
+
+pub fn sanitize_command_args(args: &[String]) -> Result<Vec<String>> {
+    let dangerous = [';', '|', '&', '$', '`', '(', ')', '{', '}', '[', ']', '<', '>', '\'', '"', '\\'];
+    for arg in args {
+        if arg.chars().any(|c| dangerous.contains(&c)) {
+            return Err(anyhow!("Dangerous character in argument"));
+        }
+    }
+    Ok(args.to_vec())
+}
+```
+
+### Security Config
+```toml
+[security]
+allowed_directories = [".", "~/projects"]
+sandbox_enabled = false
+max_file_size_mb = 10
+blocked_paths = [".git", ".env", "*.key", "*.pem"]
+
+[security.rate_limit]
+enabled = true
+max_requests_per_minute = 120
+```
+
+---
+
+## 📊 5. Performance Metrics
+
+```rust
+pub struct Metrics {
+    request_counts: Arc<RwLock<HashMap<String, u64>>>,
+    request_latencies: Arc<RwLock<Vec<Duration>>>,
+    lsp_response_times: Arc<RwLock<HashMap<String, Vec<Duration>>>>,
+    started_at: Instant,
+}
+
+impl Metrics {
+    pub async fn get_summary(&self) -> MetricsSummary {
+        let request_counts = self.request_counts.read().await.clone();
+        let latencies = self.request_latencies.read().await;
+        
+        let avg_latency = if latencies.is_empty() {
+            Duration::ZERO
+        } else {
+            latencies.iter().sum::<Duration>() / latencies.len() as u32
+        };
+        
+        MetricsSummary {
+            uptime: self.started_at.elapsed(),
+            total_requests: request_counts.values().sum(),
+            requests_by_tool: request_counts,
+            avg_request_latency: avg_latency,
+            lsp_stats: self.lsp_response_times.read().await.clone(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct MetricsSummary {
+    pub uptime: Duration,
+    pub total_requests: u64,
+    pub requests_by_tool: HashMap<String, u64>,
+    pub avg_request_latency: Duration,
+    pub lsp_stats: HashMap<String, Vec<Duration>>,
+}
+
+pub const METRICS_RESOURCE: &str = "metrics://server";
+```
+
+---
+
+## ⚙️ 6. Configuration Schema
+
+### Config Structure
+```rust
+#[derive(Deserialize, Serialize)]
+pub struct Config {
+    #[serde(default)]
+    pub rust_analyzer: RustAnalyzerConfig,
+    #[serde(default)]
+    pub lsp: LspConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
+    #[serde(default)]
+    pub security: SecurityConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct RustAnalyzerConfig {
+    pub path: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+    pub update_channel: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct LspConfig {
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_true")]
+    pub crash_recovery: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            rust_analyzer: RustAnalyzerConfig { path: None, auto_update: true, update_channel: "nightly".to_string() },
+            lsp: LspConfig { timeout_seconds: 30, max_retries: 3, crash_recovery: true },
+            cache: CacheConfig { enabled: true, ttl_seconds: 300, max_entries: 1000 },
+            security: SecurityConfig { allowed_directories: vec![], blocked_paths: vec![], max_file_size_mb: 10 },
+            logging: LoggingConfig { level: "info".to_string(), format: "text".to_string() },
+        }
+    }
+}
+```
+
+### Environment Variables
+```bash
+export RUST_ANALYZER_PATH=/custom/path/rust-analyzer
+export RA_MCP_AUTO_UPDATE=true
+export RA_MCP_LOG_LEVEL=debug
+export RA_MCP_TIMEOUT=60
+```
+
+---
+
+## ❤️ 7. Health Check
+
+```rust
+pub struct HealthStatus {
+    pub server_version: String,
+    pub uptime_seconds: u64,
+    pub rust_analyzer: RaHealth,
+    pub lsp_connection: LspHealth,
+    pub cache_stats: CacheHealth,
+}
+
+pub const HEALTH_RESOURCE: &str = "health://status";
+
+pub async fn get_health_status(state: &AppState) -> HealthStatus {
+    let ra_version = updater::version::current_version().await;
+    let latest = updater::github::get_latest_release_tag().await.ok();
+    
+    let lsp = state.lsp_client.read().await;
+    
+    HealthStatus {
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: state.start_time.elapsed().as_secs(),
+        rust_analyzer: RaHealth {
+            path: state.ra_path.display().to_string(),
+            version: ra_version,
+            up_to_date: ra_version.as_ref() == latest.as_ref(),
+        },
+        lsp_connection: LspHealth {
+            connected: lsp.is_some(),
+            workspace_loaded: lsp.as_ref().map(|c| c.is_ready()).unwrap_or(false),
+        },
+        cache_stats: CacheHealth { enabled: state.config.cache.enabled },
+    }
+}
+
+ToolDefinition {
+    name: "health_check",
+    description: "Get comprehensive health status of the MCP server",
+    input_schema: json!({ "type": "object", "properties": { "include_details": { "type": "boolean", "default": false } } }),
+},
+```
+
+---
+
+## 🧪 8. Test Strategy
+
+### Mock LSP Server
+```rust
+pub struct MockLspServer {
+    responses: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+}
+
+impl MockLspServer {
+    pub fn set_response(&self, method: &str, response: serde_json::Value) {
+        let mut responses = futures::executor::block_on(self.responses.lock());
+        responses.insert(method.to_string(), response);
+    }
+}
+```
+
+### Integration Tests
+```rust
+#[tokio::test]
+async fn test_error_recovery() {
+    let server = setup_test_server();
+    server.kill_lsp_process().await;
+    
+    let result = server.call_tool("hover", json!({"file_path": "src/main.rs", "line": 1, "column": 1})).await;
+    assert!(result.is_err());
+    
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let result = server.call_tool("hover", json!({"file_path": "src/main.rs", "line": 1, "column": 1})).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_multi_workspace() {
+    let server = setup_test_server();
+    server.call_tool("open_project", json!({"workspace_root": "tests/fixtures/project_a"})).await.unwrap();
+    server.call_tool("open_project", json!({"workspace_root": "tests/fixtures/project_b"})).await.unwrap();
+    
+    let result = server.call_tool("list_workspaces", json!({})).await.unwrap();
+    assert!(result.contains("project_a"));
+    assert!(result.contains("project_b"));
+}
+```
+
+---
+
+## ⚡ 9. CLI Extension
+
+```rust
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long, env = "RUST_ANALYZER_PATH")]
+    ra_path: Option<String>,
+    
+    #[arg(long, env = "RUST_PROJECT_ROOT")]
+    project_root: Option<String>,
+    
+    #[arg(long, short = 'c', default_value = "config/default.toml")]
+    config: String,
+    
+    #[arg(long, default_value_t = false)]
+    no_auto_update: bool,
+    
+    #[arg(long, default_value = "info")]
+    log_level: String,
+    
+    #[arg(long, default_value_t = false)]
+    metrics: bool,
+    
+    #[arg(long, default_value_t = false)]
+    health_check: bool,
+}
+```
+
+---
+
+(End of file)

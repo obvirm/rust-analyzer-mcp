@@ -1,0 +1,52 @@
+[rust_analyzer]
+# Path to rust-analyzer binary (optional, auto-detected if not specified)
+# path = "/usr/local/bin/rust-analyzer"
+
+# Enable auto-update checking on startup
+auto_update = true
+
+# Update channel: "nightly" or "stable"
+update_channel = "nightly"
+
+[lsp]
+# Timeout for LSP requests in seconds
+timeout_seconds = 30
+
+# Maximum retry attempts for failed requests
+max_retries = 3
+
+# Enable automatic LSP restart on crash
+crash_recovery = true
+
+[cache]
+# Enable caching
+enabled = true
+
+# Cache TTL in seconds
+ttl_seconds = 300
+
+# Maximum number of cache entries
+max_entries = 1000
+
+# Disk cache directory (optional)
+# disk_cache_dir = "/tmp/rust-analyzer-mcp-cache"
+
+[security]
+# Allowed directories for file operations
+# allowed_directories = [".", "~/projects"]
+
+# Blocked path patterns
+# blocked_paths = [".git", ".env", "*.key", "*.pem"]
+
+# Maximum file size for analysis in MB
+max_file_size_mb = 10
+
+# Enable path traversal prevention
+prevent_path_traversal = true
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: "text" or "json"
+format = "text"

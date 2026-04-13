@@ -13,3 +13,4 @@ terminal-security.json
 logs/
 -p/
 plan-mcp,md
+tests/
